@@ -2,11 +2,58 @@
   <div class="graph-container">
     <div ref="container"></div>
     <div class="overlay">
-      <h1>课程关系图 Course Relationship Graph</h1>
-      <p>拖动旋转，滚轮缩放，右键平移 | Drag to rotate, scroll to zoom, right-click to pan</p>
-      <div class="search-box">
-        <input v-model="searchQuery" @keyup.enter="handleSearch" placeholder="搜索课程..." />
-        <button @click="searchNode">搜索</button>
+      <div class="header">
+        <h1 class="title">
+          <span class="title-cn">智能课程知识图谱</span>
+          <span class="title-en">Knowledge Graph Visualization</span>
+        </h1>
+        <p class="subtitle">点击节点查看学习路径 · 拖动旋转 · 滚轮缩放</p>
+      </div>
+
+      <div class="search-container">
+        <input
+          v-model="searchQuery"
+          @keyup.enter="searchNode"
+          placeholder="搜索课程..."
+          class="search-input"
+        />
+        <button @click="searchNode" class="search-button">
+          <span>🔍</span>
+        </button>
+      </div>
+
+      <div class="legend">
+        <div class="legend-title">课程分类</div>
+        <div class="legend-items">
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #4A90E2;"></span>
+            <span>基础课程</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #10B981;"></span>
+            <span>核心课程</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #F59E0B;"></span>
+            <span>进阶课程</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #EF4444;"></span>
+            <span>高级课程</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 导航按钮 -->
+      <div class="nav-buttons">
+        <button @click="goToDashboard" class="nav-btn dashboard-btn">
+          <span class="nav-icon">🎯</span>
+          <span class="nav-text">智能导学系统</span>
+        </button>
+        <button @click="goToChatAssistant" class="nav-btn chat-btn">
+          <span class="nav-icon">💬</span>
+          <span class="nav-text">AI学习助手</span>
+        </button>
       </div>
     </div>
   </div>
@@ -17,12 +64,10 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer'
-import { useRouter } from 'vue-router'
 
 
 export default {
   setup() {
-    const router = useRouter()
     const container = ref(null)
     const loading = ref(true)
     const searchQuery = ref('')
@@ -31,6 +76,7 @@ export default {
     let edges = []; // 显式声明
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
+    let selectedNode = null // 当前选中的节点
     
 
     const courseData = {
@@ -155,9 +201,8 @@ export default {
         node.rotation.y += 0.005
       })
 
-      edges.forEach(edge => {
-        edge.material.opacity = (Math.sin(Date.now() * 0.001) + 1) * 0.3 + 0.3
-      })
+      // 移除边的闪烁动画，保持静态透明度
+      // 只有在路径追踪时才改变边的透明度
 
       controls.update()
       renderer.render(scene, camera)
@@ -217,6 +262,80 @@ export default {
       }
     }
 
+    // 计算课程的先修数量
+    function getPrerequisiteCount(nodeId) {
+      return courseData.edges.filter(edge => edge.to === nodeId).length
+    }
+
+    // 根据先修数量获取颜色
+    function getNodeColor(nodeId) {
+      const prereqCount = getPrerequisiteCount(nodeId)
+      if (prereqCount === 0) {
+        return { color: 0x4A90E2, emissive: 0x2563eb, name: '基础' } // 蓝色 - 基础课程
+      } else if (prereqCount <= 2) {
+        return { color: 0x10B981, emissive: 0x059669, name: '核心' } // 绿色 - 核心课程
+      } else if (prereqCount <= 4) {
+        return { color: 0xF59E0B, emissive: 0xD97706, name: '进阶' } // 橙色 - 进阶课程
+      } else {
+        return { color: 0xEF4444, emissive: 0xDC2626, name: '高级' } // 红色 - 高级课程
+      }
+    }
+
+    // 追踪先修路径（递归）
+    function tracePrerequisites(nodeId, visited = new Set()) {
+      if (visited.has(nodeId)) return visited
+      visited.add(nodeId)
+
+      const prerequisites = courseData.edges.filter(edge => edge.to === nodeId)
+      prerequisites.forEach(edge => {
+        tracePrerequisites(edge.from, visited)
+      })
+
+      return visited
+    }
+
+    // 重置所有高亮
+    function resetHighlights() {
+      nodes.forEach(node => {
+        const colorInfo = getNodeColor(node.userData.id)
+        node.material.color.setHex(colorInfo.color)
+        node.material.emissive.setHex(colorInfo.emissive)
+        node.scale.set(1, 1, 1)
+      })
+
+      edges.forEach(edge => {
+        edge.material.opacity = 0.05
+        edge.material.color.setHex(0x00ffff)
+      })
+    }
+
+    // 高亮路径
+    function highlightPath(nodeId) {
+      resetHighlights()
+
+      const pathNodes = tracePrerequisites(nodeId)
+
+      // 高亮路径上的节点
+      nodes.forEach(node => {
+        if (pathNodes.has(node.userData.id)) {
+          node.material.emissive.setHex(0xffffff)
+          node.scale.set(1.5, 1.5, 1.5)
+        }
+      })
+
+      // 高亮路径上的边
+      edges.forEach(edge => {
+        const fromId = edge.userData?.from
+        const toId = edge.userData?.to
+        if (fromId && toId && pathNodes.has(fromId) && pathNodes.has(toId)) {
+          edge.material.opacity = 0.8
+          edge.material.color.setHex(0xffff00) // 黄色高亮
+        }
+      })
+
+      selectedNode = nodeId
+    }
+
     function onMouseClick(event) {
       // 计算正确鼠标坐标
       const rect = renderer.domElement.getBoundingClientRect()
@@ -227,7 +346,21 @@ export default {
       const intersects = raycaster.intersectObjects(nodes)
 
       if (intersects.length > 0) {
-        router.push({ name: 'course' }) // 移除参数传递
+        const clickedNode = intersects[0].object
+        const nodeId = clickedNode.userData.id
+
+        // 如果点击的是同一个节点，则取消高亮
+        if (selectedNode === nodeId) {
+          resetHighlights()
+          selectedNode = null
+        } else {
+          // 高亮新的路径
+          highlightPath(nodeId)
+        }
+      } else {
+        // 点击空白处，重置高亮
+        resetHighlights()
+        selectedNode = null
       }
     }
 
@@ -312,20 +445,24 @@ export default {
       nodes = []
       edges = []
 
-      // 创建节点
+      // 创建节点 - 使用单一球面布局（更美观）
       const sphereGeometry = new THREE.SphereGeometry(2, 32, 32)
-      const sphereMaterial = new THREE.MeshPhongMaterial({
-        color: 0x00aaff,
-        emissive: 0x0044aa,
-        specular: 0xffffff,
-        shininess: 100
-      })
-
-      const radius = 120
+      const radius = 120  // 固定半径
       const phi = Math.PI * (3 - Math.sqrt(5)) // 黄金角度
 
       courseData.nodes.forEach((node, index) => {
-        // 节点位置计算
+        // 根据先修数量获取颜色
+        const colorInfo = getNodeColor(node.id)
+
+        // 为每个节点创建独立的材质
+        const sphereMaterial = new THREE.MeshPhongMaterial({
+          color: colorInfo.color,
+          emissive: colorInfo.emissive,
+          specular: 0xffffff,
+          shininess: 100
+        })
+
+        // 球面均匀分布算法（黄金角度螺旋）
         const t = index / courseData.nodes.length
         const inclination = Math.acos(1 - 2 * t)
         const azimuth = phi * index
@@ -336,13 +473,13 @@ export default {
           radius * Math.sin(inclination) * Math.sin(azimuth),
           radius * Math.cos(inclination)
         )
-        sphere.userData = { id: node.id } // 存储课程ID
+        sphere.userData = { id: node.id, label: node.label, type: colorInfo.name } // 存储课程信息
 
         // 添加节点到场景
         scene.add(sphere)
         nodes.push(sphere)
 
-        // 创建CSS2D标签（实际使用CSS2DObject）
+        // 创建CSS2D标签
         // eslint-disable-next-line no-unused-vars
         const label = new CSS2DObject(createLabelElement(node.label))
         label.position.copy(sphere.position)
@@ -350,17 +487,18 @@ export default {
       })
 
       // 创建边
-      const edgeMaterial = new THREE.LineBasicMaterial({
-        color: 0x00ffff,
-        transparent: true,
-        opacity: 0.6
-      })
-
       courseData.edges.forEach(edge => {
         const startNode = nodes.find(n => n.userData.id === edge.from)
         const endNode = nodes.find(n => n.userData.id === edge.to)
 
         if (startNode && endNode) {
+          // 为每条边创建独立的材质
+          const edgeMaterial = new THREE.LineBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.05 // 默认几乎透明，减少视觉混乱
+          })
+
           // 创建贝塞尔曲线
           const start = startNode.position
           const end = endNode.position
@@ -378,7 +516,10 @@ export default {
           const points = curve.getPoints(50)
           const geometry = new THREE.BufferGeometry().setFromPoints(points)
           const line = new THREE.Line(geometry, edgeMaterial)
-          
+
+          // 存储边的起点和终点信息，用于路径追踪
+          line.userData = { from: edge.from, to: edge.to }
+
           scene.add(line)
           edges.push(line) // 必须添加到edges数组
         }
@@ -428,7 +569,16 @@ export default {
       controls.dispose()
     })
 
-    return { container, loading, searchQuery, searchNode }
+    // 导航方法
+    const goToDashboard = () => {
+      window.location.href = '/dashboard'
+    }
+
+    const goToChatAssistant = () => {
+      window.location.href = '/chat-assistant'
+    }
+
+    return { container, loading, searchQuery, searchNode, goToDashboard, goToChatAssistant }
   }
 }
 </script>
@@ -442,22 +592,152 @@ export default {
 
 .overlay {
   position: absolute;
-  top: 1rem;
-  left: 1rem;
+  top: 2rem;
+  left: 2rem;
   color: white;
   z-index: 10;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
 }
 
-.overlay h1 {
-  font-size: 1.5rem;
-  font-weight: bold;
-  margin-bottom: 0.5rem;
+/* 标题区域 */
+.header {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
-.overlay p {
+.title {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.title-cn {
+  font-size: 1.75rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 1px;
+}
+
+.title-en {
   font-size: 0.875rem;
-  opacity: 0.7;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  margin: 0.75rem 0 0 0;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 搜索框 */
+.search-container {
+  display: flex;
+  gap: 0.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  padding: 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.search-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: white;
+  font-size: 0.875rem;
+  outline: none;
+  transition: all 0.3s ease;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.search-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.search-input:focus {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+}
+
+.search-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  color: white;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.search-button:active {
+  transform: translateY(0);
+}
+
+/* 图例 */
+.legend {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.legend-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
 }
 
 .loading {
@@ -491,5 +771,84 @@ export default {
 .label-renderer {
   z-index: 2;
   pointer-events: none !important;
+}
+
+/* 导航按钮 */
+.nav-buttons {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  z-index: 100;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border: none;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  backdrop-filter: blur(10px);
+}
+
+.dashboard-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.dashboard-btn:hover {
+  transform: translateX(-8px) scale(1.05);
+  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.5);
+}
+
+.chat-btn {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.chat-btn:hover {
+  transform: translateX(-8px) scale(1.05);
+  box-shadow: 0 8px 24px rgba(240, 147, 251, 0.5);
+}
+
+.nav-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.nav-text {
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .nav-buttons {
+    bottom: 1rem;
+    right: 1rem;
+  }
+
+  .nav-btn {
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+  }
+
+  .nav-icon {
+    font-size: 1.25rem;
+  }
+
+  .nav-text {
+    font-size: 0.875rem;
+  }
 }
 </style>

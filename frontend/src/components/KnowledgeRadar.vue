@@ -139,7 +139,9 @@ export default {
     }
 
     const initRadarChart = async () => {
-      if (!radarChart.value || Object.keys(props.knowledgeState).length === 0) return
+      if (!radarChart.value || Object.keys(props.knowledgeState).length === 0) {
+        return
+      }
 
       try {
         const echarts = await loadECharts()
@@ -160,11 +162,20 @@ export default {
         const option = {
           tooltip: {
             trigger: 'item',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            borderColor: '#667eea',
+            borderWidth: 1,
+            textStyle: {
+              color: '#fff'
+            },
             formatter: (params) => {
               const data = params.data.value
               let result = '<div style="padding: 10px;">'
+              result += '<strong style="color: #667eea;">知识掌握度分析</strong><br/>'
               indicators.forEach((ind, idx) => {
-                result += `${ind.name}: ${(data[idx] * 100).toFixed(0)}%<br/>`
+                const percent = (data[idx] * 100).toFixed(0)
+                const color = data[idx] >= 0.7 ? '#4ade80' : data[idx] >= 0.4 ? '#fbbf24' : '#f87171'
+                result += `<span style="color: ${color};">●</span> ${ind.name}: ${percent}%<br/>`
               })
               result += '</div>'
               return result
@@ -173,16 +184,23 @@ export default {
           radar: {
             indicator: indicators,
             shape: 'polygon',
-            splitNumber: 4,
+            splitNumber: 5,
+            center: ['50%', '50%'],
+            radius: '65%',
             name: {
               textStyle: {
                 color: '#fff',
-                fontSize: 12
+                fontSize: 13,
+                fontWeight: 600,
+                backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                borderRadius: 3,
+                padding: [3, 5]
               }
             },
             splitLine: {
               lineStyle: {
-                color: 'rgba(255, 255, 255, 0.2)'
+                color: 'rgba(255, 255, 255, 0.3)',
+                width: 1
               }
             },
             splitArea: {
@@ -190,13 +208,17 @@ export default {
               areaStyle: {
                 color: [
                   'rgba(255, 255, 255, 0.05)',
-                  'rgba(255, 255, 255, 0.1)'
+                  'rgba(255, 255, 255, 0.1)',
+                  'rgba(255, 255, 255, 0.05)',
+                  'rgba(255, 255, 255, 0.1)',
+                  'rgba(255, 255, 255, 0.05)'
                 ]
               }
             },
             axisLine: {
               lineStyle: {
-                color: 'rgba(255, 255, 255, 0.3)'
+                color: 'rgba(255, 255, 255, 0.5)',
+                width: 1.5
               }
             }
           },
@@ -204,19 +226,27 @@ export default {
             {
               name: '知识掌握度',
               type: 'radar',
+              symbol: 'circle',
+              symbolSize: 6,
               data: [
                 {
                   value: values,
                   name: '当前水平',
                   areaStyle: {
-                    color: 'rgba(102, 126, 234, 0.4)'
+                    color: 'rgba(102, 126, 234, 0.5)'
                   },
                   lineStyle: {
-                    color: '#667eea',
-                    width: 2
+                    color: '#fff',
+                    width: 3,
+                    shadowColor: 'rgba(102, 126, 234, 0.5)',
+                    shadowBlur: 10
                   },
                   itemStyle: {
-                    color: '#667eea'
+                    color: '#fff',
+                    borderColor: '#667eea',
+                    borderWidth: 2,
+                    shadowColor: 'rgba(102, 126, 234, 0.8)',
+                    shadowBlur: 10
                   }
                 }
               ]
@@ -239,17 +269,22 @@ export default {
       }
     }
 
-    onMounted(() => {
-      nextTick(() => {
-        initRadarChart()
-      })
-    })
+    // 监听 radarChart ref 和 knowledgeState 的变化
+    watch([() => radarChart.value, () => props.knowledgeState], ([chartRef, state]) => {
+      if (chartRef && state && Object.keys(state).length > 0) {
+        nextTick(() => {
+          initRadarChart()
+        })
+      }
+    }, { deep: true, immediate: true })
 
-    watch(() => props.knowledgeState, () => {
-      nextTick(() => {
-        initRadarChart()
-      })
-    }, { deep: true })
+    onMounted(() => {
+      if (radarChart.value && props.knowledgeState && Object.keys(props.knowledgeState).length > 0) {
+        nextTick(() => {
+          initRadarChart()
+        })
+      }
+    })
 
     return {
       radarChart,

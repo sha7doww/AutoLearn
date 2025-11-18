@@ -67,26 +67,64 @@
       </div>
 
       <!-- 聊天主界面 -->
-      <div class="chat-container" v-show="showChat">
-        <div id="chatHistory">
-          <div 
-            v-for="(message, index) in chatMessages" 
-            :key="index" 
-            :class="`message ${message.role}`"
-          >
-            <div class="message-bubble" v-html="message.content"></div>
+      <div class="chat-layout" v-show="showChat">
+        <div class="chat-container" :class="{ 'with-recommendations': showRecommendations }">
+          <div id="chatHistory">
+            <div
+              v-for="(message, index) in chatMessages"
+              :key="index"
+              :class="`message ${message.role}`"
+            >
+              <div class="message-bubble" v-html="message.content"></div>
+            </div>
+          </div>
+          <div class="input-section">
+            <div class="input-group">
+              <input
+                type="text"
+                id="userInput"
+                placeholder="输入消息（Enter发送，Shift+Enter换行）"
+                v-model="userMessage"
+                @keydown.enter.exact.prevent="sendMessage"
+              >
+              <button id="sendBtn" @click="sendMessage">发送</button>
+            </div>
           </div>
         </div>
-        <div class="input-section">
-          <div class="input-group">
-            <input 
-              type="text" 
-              id="userInput" 
-              placeholder="输入消息（Enter发送，Shift+Enter换行）"
-              v-model="userMessage"
-              @keydown.enter.exact.prevent="sendMessage"
-            >
-            <button id="sendBtn" @click="sendMessage">发送</button>
+
+        <!-- 推荐结果展示区域 -->
+        <div v-if="showRecommendations" class="recommendations-panel">
+          <div class="panel-header">
+            <h3>📚 课程推荐</h3>
+            <button class="close-btn" @click="showRecommendations = false">✕</button>
+          </div>
+          <div class="recommendations-content">
+            <div v-if="recommendedCourses.length === 0" class="empty-recommendations">
+              <p>暂无推荐课程</p>
+              <p class="hint">询问AI助手获取个性化课程推荐</p>
+            </div>
+            <div v-else class="course-cards">
+              <div
+                v-for="(course, index) in recommendedCourses"
+                :key="index"
+                class="course-card"
+              >
+                <div class="course-rank">{{ index + 1 }}</div>
+                <div class="course-info">
+                  <h4 class="course-name">{{ course.label || course.name }}</h4>
+                  <div class="course-meta">
+                    <span class="meta-tag">{{ course.difficulty || '中等' }}</span>
+                    <span class="meta-tag">{{ course.credits || 3 }}学分</span>
+                    <span class="meta-tag">{{ course.course_type || '必修' }}</span>
+                  </div>
+                  <p v-if="course.reason" class="course-reason">{{ course.reason }}</p>
+                  <div v-if="course.prerequisites && course.prerequisites.length > 0" class="prerequisites">
+                    <span class="prereq-label">先修:</span>
+                    <span class="prereq-items">{{ course.prerequisites.join(', ') }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -113,6 +151,25 @@
 
 <script>
 import axios from 'axios';
+import { marked } from 'marked';
+import hljs from 'highlight.js';
+import 'highlight.js/styles/github-dark.css';
+
+// Configure marked to use highlight.js for code syntax highlighting
+marked.setOptions({
+  highlight: function(code, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return hljs.highlight(code, { language: lang }).value;
+      } catch (err) {
+        console.error('Highlight error:', err);
+      }
+    }
+    return hljs.highlightAuto(code).value;
+  },
+  breaks: true, // Convert \n to <br>
+  gfm: true // Enable GitHub flavored markdown
+});
 
 export default {
   name: 'ChatAssistant',
@@ -131,6 +188,8 @@ export default {
       searchResults: [],
       currentSession: Date.now().toString(),
       MAX_HISTORY: 50,
+      recommendedCourses: [], // Store recommended courses
+      showRecommendations: false, // Control recommendation panel visibility
       // 知识图谱数据（保持不变）
       nodes: [
       {"id": "数学分析"},
@@ -415,7 +474,11 @@ export default {
         });
 
         const reply = response.data.choices[0].message.content;
-        const formattedReply = this.formatResponse(reply); // 调用格式化方法
+
+        // Extract course recommendations if present
+        this.extractRecommendations(reply, message);
+
+        const formattedReply = this.formatResponse(reply);
         this.addMessage('assistant', formattedReply);
         this.saveToHistory(message, formattedReply);
 
@@ -426,15 +489,69 @@ export default {
         this.isWaitingForResponse = false;
       }
     },
+    extractRecommendations(reply, userQuery) {
+      // Check if the reply contains course recommendations
+      const recommendKeywords = ['推荐', '建议', '学习路径', '课程'];
+      const hasRecommendation = recommendKeywords.some(keyword =>
+        userQuery.includes(keyword) || reply.includes(keyword)
+      );
+
+      if (hasRecommendation) {
+        // Extract course names from reply and match with nodes
+        const extractedCourses = [];
+        this.nodes.forEach(node => {
+          if (reply.includes(node.id)) {
+            // Find course details
+            const courseInfo = {
+              label: node.id,
+              difficulty: this.getCourseProperty(node.id, 'difficulty'),
+              credits: this.getCourseProperty(node.id, 'credits'),
+              course_type: this.getCourseProperty(node.id, 'course_type'),
+              prerequisites: this.getPrerequisites(node.id)
+            };
+            extractedCourses.push(courseInfo);
+          }
+        });
+
+        if (extractedCourses.length > 0) {
+          this.recommendedCourses = extractedCourses.slice(0, 10); // Limit to 10
+          this.showRecommendations = true;
+        }
+      }
+    },
+    getCourseProperty(courseId, property) {
+      // This would ideally fetch from course_data.json or backend API
+      // For now, return default values
+      const defaults = {
+        difficulty: '中等',
+        credits: 3,
+        course_type: '必修'
+      };
+      return defaults[property];
+    },
+    getPrerequisites(courseId) {
+      // Find all courses that are prerequisites for this course
+      const prerequisites = [];
+      this.edges.forEach(edge => {
+        if (edge.target === courseId) {
+          prerequisites.push(edge.source);
+        }
+      });
+      return prerequisites;
+    },
     formatResponse(text) {
+      // Clean up AI-specific phrases
       text = text.replace(/根据知识图谱(推荐|可知|显示)/g, '');
-      text = text.replace(/#/g, ''); // 移除所有#
-      text = text.replace(/[•\-*](\s*)/g, '$1');
-      text = text.replace(/(阶段\d+：)/g, '**$1**');
-      text = text.replace(/(\d+\.\s)(.*?)(：)/g, '$1**$2**$3');
-      text = text.replace(/\*\*(.*?)\*\*/g, '$1'); // 去掉加粗标记
-      text = text.replace(/\n+/g, '<br>');
-      return text.trim();
+
+      // Use marked to render markdown to HTML
+      try {
+        const html = marked.parse(text);
+        return html.trim();
+      } catch (err) {
+        console.error('Markdown parse error:', err);
+        // Fallback: convert newlines to <br>
+        return text.replace(/\n/g, '<br>').trim();
+      }
     },
     addMessage(role, content) {
       this.chatMessages.push({ role, content });
@@ -551,7 +668,6 @@ export default {
 </script>
 
 <style scoped>
-/* 保持原有的所有样式不变 */
 :root {
   --sidebar-width: 260px;
   --primary-color: #2c3e50;
@@ -565,27 +681,40 @@ export default {
 }
 
 body {
-  font-family: "Segoe UI", system-ui;
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   display: flex;
   min-height: 100vh;
-  background: #f8f9fa;
+  background: linear-gradient(135deg, #1e1e2e 0%, #2c3548 100%);
 }
 
 /* 侧边栏样式 */
 .sidebar {
   width: var(--sidebar-width);
-  background: var(--primary-color);
+  background: linear-gradient(180deg, #2c3e50 0%, #1a252f 100%);
   color: white;
   padding: 20px;
   position: fixed;
   height: 100%;
-  border-right: 1px solid rgba(255,255,255,0.1);
+  border-right: 1px solid rgba(102, 126, 234, 0.3);
+  z-index: 100;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.3);
 }
 
 .logo-section {
   padding: 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid rgba(102, 126, 234, 0.3);
   margin-bottom: 30px;
+  text-align: center;
+}
+
+.logo-section h2 {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0;
 }
 
 .nav-menu {
@@ -606,12 +735,14 @@ body {
 }
 
 .nav-item.active {
-  background: var(--accent-color);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateX(4px);
 }
 
 .nav-item:hover {
-  background: rgba(255,255,255,0.1);
+  background: rgba(102, 126, 234, 0.2);
+  transform: translateX(2px);
 }
 
 /* 主内容区 */
@@ -622,22 +753,37 @@ body {
   min-height: 100vh;
 }
 
+/* 聊天布局 - 支持推荐面板 */
+.chat-layout {
+  display: flex;
+  gap: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
 /* 聊天容器 */
 .chat-container {
-  max-width: 800px;
-  margin: 0 auto;
-  background: white;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
   border-radius: 16px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   overflow: hidden;
   text-align: left;
+  transition: all 0.3s ease;
+}
+
+.chat-container.with-recommendations {
+  max-width: 800px;
 }
 
 #chatHistory {
   height: 500px;
   padding: 24px;
   overflow-y: auto;
-  background: #f8fafb;
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(5px);
 }
 
 .message {
@@ -654,25 +800,283 @@ body {
   padding: 12px 20px;
   border-radius: 20px;
   max-width: 70%;
-  line-height: 1.5;
+  line-height: 1.6;
+  text-align: left;
 }
 
 .user .message-bubble {
-  background: var(--accent-color);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
 .assistant .message-bubble {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f0f0f0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Markdown 样式 */
+.message-bubble :deep(h1),
+.message-bubble :deep(h2),
+.message-bubble :deep(h3) {
+  margin: 16px 0 12px 0;
+  font-weight: 600;
+}
+
+.message-bubble :deep(h1) { font-size: 1.5em; }
+.message-bubble :deep(h2) { font-size: 1.3em; }
+.message-bubble :deep(h3) { font-size: 1.1em; }
+
+.message-bubble :deep(p) {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.message-bubble :deep(ul),
+.message-bubble :deep(ol) {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.message-bubble :deep(li) {
+  margin: 6px 0;
+}
+
+.message-bubble :deep(code) {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9em;
+}
+
+.message-bubble :deep(pre) {
+  background: #1e1e1e;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.message-bubble :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: #d4d4d4;
+}
+
+.message-bubble :deep(blockquote) {
+  border-left: 4px solid var(--accent-color);
+  padding-left: 16px;
+  margin: 12px 0;
+  color: #666;
+  font-style: italic;
+}
+
+.message-bubble :deep(table) {
+  border-collapse: collapse;
+  margin: 12px 0;
+  width: 100%;
+}
+
+.message-bubble :deep(th),
+.message-bubble :deep(td) {
+  border: 1px solid #ddd;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.message-bubble :deep(th) {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.message-bubble :deep(strong) {
+  font-weight: 600;
+}
+
+.message-bubble :deep(em) {
+  font-style: italic;
+}
+
+.message-bubble :deep(a) {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.message-bubble :deep(a:hover) {
+  text-decoration: underline;
+}
+
+/* 推荐面板样式 */
+.recommendations-panel {
+  width: 400px;
   background: white;
-  border: 1px solid #eee;
-  color: #333;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  overflow: hidden;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.panel-header {
+  background: linear-gradient(135deg, var(--accent-color) 0%, #2980b9 100%);
+  color: white;
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.close-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: rotate(90deg);
+}
+
+.recommendations-content {
+  padding: 20px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.empty-recommendations {
+  text-align: center;
+  padding: 40px 20px;
+  color: #666;
+}
+
+.empty-recommendations .hint {
+  font-size: 14px;
+  margin-top: 10px;
+  opacity: 0.7;
+}
+
+.course-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.course-card {
+  background: #f8fafb;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  gap: 12px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.course-card:hover {
+  background: #e8eef3;
+  transform: translateX(4px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.course-rank {
+  background: var(--accent-color);
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.course-info {
+  flex: 1;
+}
+
+.course-name {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: #2c3e50;
+}
+
+.course-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.meta-tag {
+  background: white;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #666;
+  border: 1px solid #e0e0e0;
+}
+
+.course-reason {
+  font-size: 13px;
+  color: #555;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.prerequisites {
+  font-size: 12px;
+  color: #666;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #ddd;
+}
+
+.prereq-label {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.prereq-items {
+  opacity: 0.8;
 }
 
 /* 输入区域 */
 .input-section {
   padding: 24px;
-  background: white;
-  border-top: 1px solid #eee;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(102, 126, 234, 0.2);
 }
 
 .input-group {
@@ -683,31 +1087,47 @@ body {
 #userInput {
   flex: 1;
   padding: 14px 20px;
-  border: 1px solid #ddd;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
   border-radius: 30px;
   font-size: 16px;
+  color: white;
   transition: all 0.2s;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#userInput::placeholder {
+  color: rgba(255, 255, 255, 0.5);
 }
 
 #userInput:focus {
-  border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px rgba(52,152,219,0.1);
+  outline: none;
+  border-color: #667eea;
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
 }
 
 button {
   padding: 12px 24px;
-  background: var(--accent-color);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 30px;
   cursor: pointer;
   font-size: 1rem;
-  transition: all 0.2s;
+  font-weight: 600;
+  transition: all 0.3s;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 button:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}
+
+button:active {
+  transform: translateY(0);
 }
 
 /* 历史记录样式 */
@@ -728,10 +1148,24 @@ button:hover {
 #searchInput {
   width: 100%;
   padding: 14px 20px;
-  border: 1px solid #ddd;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
   border-radius: 30px;
   margin-bottom: 15px;
   font-size: 16px;
+  color: white;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#searchInput::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+#searchInput:focus {
+  outline: none;
+  border-color: #667eea;
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
 }
 
 #searchResults {
@@ -848,5 +1282,99 @@ button:hover {
 
 .item-actions .delete-btn:hover {
   background: #ffcdd2;
+}
+
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .chat-layout {
+    flex-direction: column;
+  }
+
+  .recommendations-panel {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .chat-container.with-recommendations {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    margin-left: 0;
+    padding: 20px;
+  }
+
+  .sidebar {
+    display: none; /* 或实现移动端侧边栏菜单 */
+  }
+
+  #chatHistory {
+    height: 400px;
+  }
+
+  .message-bubble {
+    max-width: 85%;
+  }
+
+  .course-card {
+    padding: 12px;
+  }
+
+  .recommendations-content {
+    padding: 16px;
+  }
+
+  .input-group {
+    flex-wrap: wrap;
+  }
+
+  #userInput {
+    min-width: 100%;
+    margin-bottom: 8px;
+  }
+}
+
+/* 滚动条美化 */
+#chatHistory::-webkit-scrollbar,
+.recommendations-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+#chatHistory::-webkit-scrollbar-track,
+.recommendations-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+#chatHistory::-webkit-scrollbar-thumb,
+.recommendations-content::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+#chatHistory::-webkit-scrollbar-thumb:hover,
+.recommendations-content::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 动画效果 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 加载状态 */
+.input-section button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>
